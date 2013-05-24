@@ -436,34 +436,34 @@ def probability_calculation_for_insertion(insertion_result):
 	return [pre_update_list,base_list] ###for each position[[p,p,p,p,p],[p,p,p,p],[p]],['A','G'...]
 
 
-def weighted_avg_and_std(values, weights):
+def weighted_avg_and_std(values, weights,depth):
     """
     Returns the weighted average and standard deviation.
 
     values, weights -- Numpy ndarrays with the same shape.
     """
-    average = numpy.average(values, weights=weights)
-    denom=1-(weights**2).sum()
-    variance = numpy.dot(weights, (values-average)**2)/denom  # Fast and numerically precise
-    return (average, variance)
+    V1=weights.sum()
+    norm_weights=weights/V1
+    average=numpy.dot(values, norm_weights)
+    p_estimate=average/float(depth)
+    
+    V2=(norm_weights**2).sum()
+    D2=average*(1-p_estimate)
+    D22=numpy.dot(weights, (values-average)**2)/(1-V2)
+    return (p_estimate,V2*D22/(depth**2))
+    
     
 
-def weighted_fisher_test_for_mutation_test(treatment,control,accuracy):
+def weighted_fisher_test_for_mutation_test(treatment,control):
 	a=time.time()
 	treatment_read_depth=len(treatment[0])-1
 	control_read_depth=len(control[0])-1
-	treatment_mean_variance=weighted_avg_and_std(numpy.array(range(treatment_read_depth+1)), numpy.array(treatment[0]))
-	control_mean_variance=weighted_avg_and_std(numpy.array(range(control_read_depth+1)), numpy.array(control[0]))
-	treatment_weight_sum=sum(treatment[0])
-	control_weight_sum=sum(control[0])
-	treatment_weight_square=(numpy.array(treatment[0])**2).sum()
-	control_weight_square=(numpy.array(control[0])**2).sum()
-	print treatment_read_depth
-	print treatment_mean_variance[0]/treatment_read_depth
-	print ((treatment_mean_variance[0]/treatment_read_depth)*(1-treatment_mean_variance[0]/treatment_read_depth)*treatment_read_depth)
-	print (treatment_mean_variance[1])
+	treatment_mean_variance=weighted_avg_and_std(numpy.array(range(treatment_read_depth+1)), numpy.array(treatment[0]),1490)
+	control_mean_variance=weighted_avg_and_std(numpy.array(range(control_read_depth+1)), numpy.array(control[0]),717)
+	b=(treatment_mean_variance[0]-control_mean_variance[0])/math.sqrt(treatment_mean_variance[1]+control_mean_variance[1])
+	print treatment_mean_variance[0]*1490,control_mean_variance[0]*717
+	print 1-scipy.stats.norm.cdf(b)
 	
-	#print treatment_mean_variance[1]*treatment_weight_square,(treatment_mean_variance[0])*(1-treatment_mean_variance[0])*treatment_weight_sum
 	
 	print "l",time.time()-a
 	
@@ -664,7 +664,7 @@ def main():
 	control_mutation_p=probability_calculation_for_mutation_test(control[0],control[3],'A')
 	print control_mutation_p
 	
-	print weighted_fisher_test_for_mutation_test(treatment_mutation_p,control_mutation_p,0.01)
+	weighted_fisher_test_for_mutation_test(treatment_mutation_p,control_mutation_p)
 	#print weighted_fisher_test_for_deletion(treatment_mutation_p,control_mutation_p,1500,720,0.01)
 	#print weighted_fisher_test_for_mutation(treatment_mutation_p,control_mutation_p,0.5)
 	#print scipy.stats.fisher_exact([[1000,10],[1000,1]],alternative="less")[1]
