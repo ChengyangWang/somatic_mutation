@@ -11,7 +11,9 @@ import os
 import random
 import scipy
 import scipy.stats
-from collections import Counter
+import scipy.misc
+from scipy.special import beta
+from scipy.misc import comb
 from optparse import OptionParser
 
 #parser = OptionParser()
@@ -26,7 +28,7 @@ def sp(cmd):
 	return ac
 
 def generate_mpileup_for_each_chrom_on_specific_region(bam,chrom,start,reading_length): ###
-	cmd="samtools mpileup -r %s:%s-%s -s "%c(chrom,str(start),str(start+reading_length))
+	cmd="samtools mpileup -r %s:%s-%s -s %s"%(chrom,str(start),str(start+reading_length),bam)
 	return sp(cmd)[0]
 
 def sequencing_depth_filter(sequencing_depth,sequencing_depth_cutoff):
@@ -72,12 +74,19 @@ def quality_to_probability(quality):
 	return math.pow(10,-quality/10.0)
 
 
-def analyze_one_position(line,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff):  ###analyze a list of line in mpileup 
+def analyze_one_position(line,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff):  ###analyze a list of line in mpileup
+	
+	if int(line[3])>sequencing_depth_cutoff:
+		pass
+	else:
+		return False
+	
 	start=time.time()
 	mutation_result=[]
 	deletion_result=[]
 	insertion_result=[]
-	base_list=[]
+	mutation_plus={'A':0,'T':0,'C':0,'G':0}
+	mutation_minus={'A':0,'T':0,'C':0,'G':0}
 	
 	
 	base_char=line[5]
@@ -86,6 +95,8 @@ def analyze_one_position(line,base_quality_cutoff,map_quality_cutoff,sequencing_
 	
 	i=-1
 	read_counts=-1
+	plus_depth=0
+	minus_depth=0
 	
 	while True:
 		i+=1
@@ -161,59 +172,62 @@ def analyze_one_position(line,base_quality_cutoff,map_quality_cutoff,sequencing_
 		
 		base_p_map_p=mutation_filter(char_to_quality(base_char[read_counts]),base_quality_cutoff,char_to_quality(base_char[read_counts]),map_quality_cutoff)
 		if base_p_map_p:
-			
 			base_p=base_p_map_p[0]
 			map_p=base_p_map_p[1]
 		else:
 			continue
 		
 		if base==base.upper():
-			mutation_result.append([base.upper(),base_p,map_p,'+'])### base,base_probability, mapping_probability, strand
+			plus_depth+=1
+			mutation_result.append([base.upper(),base_p,map_p])### base,base_probability, mapping_probability
+			mutation_plus[base.upper()]+=1
 		else:
-			mutation_result.append([base.upper(),base_p,map_p,'-'])### base,base_probability, mapping_probability, strand
+			minus_depth+=1
+			mutation_result.append([base.upper(),base_p,map_p])### base,base_probability, mapping_probability
+			mutation_minus[base.upper()]+=1
 		
-		base_list.append(base.upper())
 	
 	if sequencing_depth_filter(len(mutation_result),sequencing_depth_cutoff):
 		pass
 	else:
 		return False
-	print time.time()-start,"dd",len(mutation_result)
-	return [mutation_result,deletion_result,insertion_result,base_list] ## extract information on specific region if not information is available, return [[],[],[]]
-
-
-def probability_calculation_for_mutation_test(mutation_result,base_list,mutation):
-
-	depth=len(mutation_result)-1
 	
-	try:
-		frequency=dict(Counter(base_list).most_common())[mutation]/float(depth)
-	except KeyError:
-		frequency=1/float(depth)
+	print "read data for certain site",time.time()-start
+	return [mutation_result,deletion_result,insertion_result,mutation_plus,mutation_minus,len(mutation_result),plus_depth,minus_depth] 
+	## extract information on specific region if neither deletion nor insertion is information available, return [] for certain content
+	### mutation_result [[base,base_p,map_p].....]
+	### deletion_result [[base_p,map_p].....]
+	### insertion_result
+	### mutation_plus {}
+	### mutation_minus {}
+	### valid sequencing depth
+	### valid plus sequencing depth
+	### valid minus sequencing depth
+
+
+def probability_calculation_for_mutation(analyse_result,mutation):
+	
 	a=time.time()
-	lower=scipy.stats.binom.ppf(0.05,depth,frequency)
-	upper=scipy.stats.binom.ppf(0.95,depth,frequency)-1
+	depth=analyse_result[5]
+	frequency=(analyse_result[3][mutation]+analyse_result[4][mutation])/float(depth)
+	if frequency==0.0:
+		frequency=1/float(depth)
+	
+	
+	lower=scipy.stats.binom.ppf(0.01,depth,frequency)
+	upper=scipy.stats.binom.ppf(0.99,depth,frequency)-1
 	
 	lower_quantile_limit=int(depth-lower)
-	
 	upper_quantile_limit=int(upper)
-
 	
 	pre_update=[1.0]
 	post_update=[]
 	
-	pre_update_plus=[1.0]
-	post_update_plus=[]
-	
-	pre_update_minus=[1.0]
-	post_update_minus=[]
-	
-	for i in range(min(lower_quantile_limit,upper_quantile_limit)+1):
-		base=mutation_result[i][0]
-		base_p=mutation_result[i][1]
-		map_p=mutation_result[i][2]
+	for i in range(min(lower_quantile_limit,upper_quantile_limit)):
+		base=analyse_result[0][i][0]
+		base_p=analyse_result[0][i][1]
+		map_p=analyse_result[0][i][2]
 		mutation_p=(1-map_p)*base_p+map_p/4.0
-		strand=mutation_result[i][3]
 		
 		if base==mutation:
 			post_update.append(mutation_p*pre_update[0])
@@ -232,12 +246,11 @@ def probability_calculation_for_mutation_test(mutation_result,base_list,mutation
 			post_update=[]
 			
 	if lower_quantile_limit<=upper_quantile_limit:
-		for i in range(lower_quantile_limit+1,upper_quantile_limit+1):
-			base=mutation_result[i][0]
-			base_p=mutation_result[i][1]
-			map_p=mutation_result[i][2]
+		for i in range(lower_quantile_limit,upper_quantile_limit):
+			base=analyse_result[0][i][0]
+			base_p=analyse_result[0][i][1]
+			map_p=analyse_result[0][i][2]
 			mutation_p=(1-map_p)*base_p+map_p/4.0
-			strand=mutation_result[i][3]
 		
 			if base==mutation:
 				
@@ -255,12 +268,12 @@ def probability_calculation_for_mutation_test(mutation_result,base_list,mutation
 				pre_update=post_update
 				post_update=[]
 	else:
-		for i in range(upper_quantile_limit+1,lower_quantile_limit+1):
-			base=mutation_result[i][0]
-			base_p=mutation_result[i][1]
-			map_p=mutation_result[i][2]
+		for i in range(upper_quantile_limit,lower_quantile_limit):
+			#print i,analyse_result[0][i],depth,lower_quantile_limit
+			base=analyse_result[0][i][0]
+			base_p=analyse_result[0][i][1]
+			map_p=analyse_result[0][i][2]
 			mutation_p=(1-map_p)*base_p+map_p/4.0
-			strand=mutation_result[i][3]
 		
 			if base==mutation:
 				post_update.append(mutation_p*pre_update[0])
@@ -276,13 +289,11 @@ def probability_calculation_for_mutation_test(mutation_result,base_list,mutation
 				pre_update=post_update
 				post_update=[]
 		
-	for i in range(max(lower_quantile_limit,upper_quantile_limit)+1,depth+1):
-		base=mutation_result[i][0]
-		base_p=mutation_result[i][1]
-		map_p=mutation_result[i][2]
+	for i in range(max(lower_quantile_limit,upper_quantile_limit),depth):
+		base=analyse_result[0][i][0]
+		base_p=analyse_result[0][i][1]
+		map_p=analyse_result[0][i][2]
 		mutation_p=(1-map_p)*base_p+map_p/4.0
-		strand=mutation_result[i][3]
-		
 		if base==mutation:
 			for j in range(1,len(pre_update)):
 				post_update.append(pre_update[j]*mutation_p+pre_update[j-1]*(1-mutation_p))
@@ -295,14 +306,10 @@ def probability_calculation_for_mutation_test(mutation_result,base_list,mutation
 			pre_update=post_update
 			post_update=[]
 				
+	print 'probability calculation time',time.time()-a
+	return [pre_update,int(lower),int(upper),depth] ###[[p,p,p,..],absolute_lower_bound,absolute_upper_bound] 
 	
-	print 'f',time.time()-a
-	return [pre_update,pre_update_plus,pre_update_minus] ###[[p,p,p,..],[p,p,p],[p,p,p,p,p]] 
-	
-	
-
-
-def probability_calculation_for_mutation(mutation_result,mutation):
+#def probability_calculation_for_mutation_previous(mutation_result,mutation):
 	a=time.time()
 	pre_update=[1.0]
 	post_update=[]
@@ -376,7 +383,7 @@ def probability_calculation_for_mutation(mutation_result,mutation):
 		
 	
 	print 'f',time.time()-a
-	return [pre_update,pre_update_plus,pre_update_minus] ###[[p,p,p,..],[p,p,p],[p,p,p,p,p]] 
+	return [pre_update,pre_update_plus,pre_update_minus] ###[[p,p,p,..],absolute_lower_bound,absolute_upper_bound] 
 	
 def probability_calculation_for_deletion(deletion_result):
 	pre_update=[1.0]
@@ -436,25 +443,63 @@ def probability_calculation_for_insertion(insertion_result):
 	return [pre_update_list,base_list] ###for each position[[p,p,p,p,p],[p,p,p,p],[p]],['A','G'...]
 
 
-def weighted_avg_and_std(values, weights,depth):
+def strand_bias_test(analyse_result,mutation):
+	treatment_plus_mutation=analyse_result[3][mutation]
+	treatment_minus_mutation=analyse_result[4][mutation]
+	treatment_plus_not_mutation=analyse_result[6]-treatment_plus_mutation
+	treatment_minus_not_mutation=analyse_result[7]-treatment_minus_mutation
+	fisher_p_value=scipy.stats.fisher_exact([[treatment_plus_not_mutation,treatment_plus_mutation],[treatment_minus_not_mutation,treatment_minus_mutation]],alternative="two-sided")[1]
+	return fisher_p_value
+	
+def weighted_avg(values, weights):
     """
-    Returns the weighted average and standard deviation.
-
-    values, weights -- Numpy ndarrays with the same shape.
+    Returns the weighted average
     """
-    V1=weights.sum()
-    norm_weights=weights/V1
-    average=numpy.dot(values, norm_weights)
-    p_estimate=average/float(depth)
+    V1=sum(weights)
+    return sum(map(lambda x,y:x*y,values,weights))/V1
+    #norm_weights=weights/V1
+    #average=numpy.dot(values, norm_weights)
+    #p_estimate=average/float(depth)
+    #
+    #V2=(norm_weights**2).sum()
+    #D2=average*(1-p_estimate)
+    #D22=numpy.dot(weights, (values-average)**2)/(1-V2)
+    #return (p_estimate,V2*D22/(depth**2))
     
-    V2=(norm_weights**2).sum()
-    D2=average*(1-p_estimate)
-    D22=numpy.dot(weights, (values-average)**2)/(1-V2)
-    return (p_estimate,V2*D22/(depth**2))
-    
-    
+def mutation_test(treatment_probability_list,control_probability_list):
+	a=time.time()
+	treatment_p=treatment_probability_list[0]
+	treatment_p_lower=treatment_probability_list[1]
+	treatment_p_upper=treatment_probability_list[2]
+	treatment_depth=treatment_probability_list[3]
+	
+	treatment_observation=weighted_avg(range(treatment_p_lower,treatment_p_upper+1), treatment_p)
+	
+	control_p=control_probability_list[0]
+	control_p_lower=control_probability_list[1]
+	control_p_upper=control_probability_list[2]
+	control_depth=control_probability_list[3]
+	
+	p_value=0.0
+	#print treatment_observation
+	#print range(control_p_lower+1,control_p_upper+2)
+	#print range(control_depth-control_p_lower+1,control_depth-control_p_upper,-1)
+	 
+	B_denominator=map(lambda x,y:beta(x,y),range(control_p_lower+1,control_p_upper+2),range(control_depth-control_p_lower+1,control_depth-control_p_upper,-1))
+	for extreme in range(int(treatment_observation),-1,-1):
+		print extreme
+		B_numerator=map(beta,range(extreme+control_p_lower+1,extreme+control_p_upper+2),range(treatment_depth+control_depth-extreme-control_p_lower+1,treatment_depth+control_depth-extreme-control_p_upper,-1))
+		med=sum(map(lambda x,y,z:x*y/z,control_p,B_numerator,B_denominator))
+		additional_p_value=med*int(comb(treatment_depth,extreme))
+		#print additional_p_value
+		if additional_p_value<=1e-10:
+			p_value+=additional_p_value
+			return 1-p_value
+		else:
+			p_value+=additional_p_value
+	return 1-p_value
 
-def weighted_fisher_test_for_mutation_test(treatment,control):
+#def weighted_fisher_test_for_mutation_test(treatment,control):
 	a=time.time()
 	treatment_read_depth=len(treatment[0])-1
 	control_read_depth=len(control[0])-1
@@ -467,9 +512,7 @@ def weighted_fisher_test_for_mutation_test(treatment,control):
 	
 	print "l",time.time()-a
 	
-	
-
-def weighted_fisher_test_for_mutation(treatment,control,accuracy):
+#def weighted_fisher_test_for_mutation(treatment,control,accuracy):
 	a=time.time()
 	treatment_read_depth=len(treatment[0])-1
 	control_read_depth=len(control[0])-1
@@ -500,7 +543,7 @@ def weighted_fisher_test_for_mutation(treatment,control,accuracy):
 	print "l",time.time()-a
 	return p_value
 	
-def weighted_fisher_test_for_strand(treatment,accuracy):
+#def weighted_fisher_test_for_strand(treatment,accuracy):
 	treatment_plus_read_depth=len(treatment[1])-1
 	treatment_minus_read_depth=len(treatment[2])-1
 	
@@ -650,25 +693,19 @@ def weighted_fisher_test_for_insertion(treatment,control,treatment_mutation_dept
 	return p_value_list
 
 def main():
+	a=time.time()
 	t="""1	10017	N	1500	CCCCCCcCC+2CTCC*CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCACCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC+2CTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCC+2CTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC*CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCACCCCCCCCCCCCCCCCCCCCCCCCCCC+2CTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCccccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcccccccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCccccc^!C^!C^!C^5C^!C^"C^]C^!C^!C^8C^!C^!C^!C^!C^!C^OC^!C^!C^!C^!C^!C^!C^"C^!C^!C^!C^!C^!C^!C^"C^!C^*C^!C^8C^!C^*C^!C^OC^!C^!C^8C^!C^!C^FC^!C^!C^2C^!C^!C^!C^!C^%C^!C^!C^!C^!C^!C^>C^#C^!C^!C^!C^*C^!C^!C^!C^!C^!C^!c^!c^5c^Fc	91#9DE7#5988##99999999999999999999999999999:999999999999999999999999999?9??>?????????DEEEEDEEDEEEEEEEEEEEFEEFFEFE@EEEEE?>??999:9999999999999999999999999999999999999999999999999999999999999???????EDDDD@DDEDEEDEEEEEEEFEEE=E?9999999999999999999999999999999899999:9999999999>;??#;?>?DDDDDDDDEED@DDCDDEEEE>EDDDEEEDDDDDDEEEEEE999999999999:999999999999999999999:9999999999999999999999:9999::9>>?>??>??DDEEEEDDDBE;EEEDDD;EDDDDDDDDDDDDEEEDEEDC?>7::9::99:9:9::9999::9::99:99:99::9::9:::999::99:9::::99:::9::99::::::99:::::9:9:::9:::9>>>>>>?>@>??>9DDDDDDDDDDDDDDDDDDDDEEEEEEEEEDDDDEEEEDFDCDDDDDEDDDFDD>::::::::::::::::9:9:99:9::9::::999:::::::::::::::::::9:::::9::9::>1?>??>>DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD>DDDDCDDDDEDDDDDED@DDDD?::::::::::::::::::::::::::9:::::::>?>?><DCCDDDDDDDDDDDDDDDDDDDDEDDDDBD:::::::::6::::::::::::::::::::':::::::::??9DDDDCCDDDDDDDDD@DDDDDDDDDDDDC:;::::;:;;;;;;;:::;:::;;:;;:;;;;;9;:;::;;::;:;;;;:;:6:;=?:==>CD<CDDDDCD2DCDCCDCDDDA=DDDDDDDD>?455;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;<=<<C>DCACCDCDDDDA;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;<;;;;=6?;<<>DCCCDDBBBB:DDDDDBDBC<><;;<;;<;;;;<;;<;<;;<<<;;;<<<<;<;<<;<<>;<>>;DD>D?ADADD>ADAADDBD;>3A@=<=<<====<=<====<<<<<<=<<<<<=====<<<=<=<=<<====<=<?;<<?;;@D@AA@@D@@@@D@@@@D;>@=============================<=======<==?<?BCCCC=CC?CCABCBCC;;00<<>>>>>>>>>=>=>>>>>>>>>>>>><>>==>>>>><><>>>>>>?>>>>>CBC6C<CCBB?CC5ACCBCC?CC>//50BEAA?BB<BB>BBBBBBBBAB>BB?B@@@BBBBBBBBBB=<==BC@?CBCBD<1/9D7@@:@9>9@@99@999999999@9999@999999999@=9A;A;?;?;C=@C@@@@CCC@AC>AA7C?B#.##	!!+!!!+!!!*!*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"!!!!!!!!!!!!!"!!!!!!!!!-$!-*!$!-0!>!!!!!"!>!0!%!!!>!!!!!!!%!!!!!!!!>!%!!**-!!!5!!!!!!!!!"!!!!!!!!!!!!!!!!!!!!$"!""!!!!!!!"!!!!"!!!!!!!!!!!!!!!!>*+!!!%!-!!$>*!>!!!!!!!!*!!!!!!!!!!!!!!!!$*8!!!!!!/!!!!!!!!!!!!$!!!!!!!!!!*!!!!+2!2!!!*!$>!%!!*!!!!$%$$*3!!>$!!,$$!5$!>$!!!$!*$!!!$$!!!!!*!*/.!!!!!'*!*!!$!!**!!!!!!!!/5!!!:**!!!*$!&$!!*!$$!!*/!">!>5!!!!2!!!!*$$!!!*$$$$!$!$!$!!!*$!$3$$0*2!!0!0!0-*!3/!'/!!!!!!!*!*!*!/!$!!$*!$!'!!/!!!!!!!/"$!$!$*!$!!!!!/!!!"!!!&!*!//"!$!!!!!!!!!!>!$/!$!!""!!+*!!&!*3>!!!*$%3!!$!*$*!!!$(!!!!$$!!8!!$!$!!*!*$****7!$>!1!!/!/./*!!!>!!!!>!!!!$!*!*$)%>!!!!/!*!$$!!*!*!*!*>*//*!/!!!*$>!!!**!!>!20!-$$*!$$$3!$!$2>>$1!!$!$!$4$>*!**!!>!2!$>>*>*>!!!$10!*!$$1$5!!"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!$!!!"!!>!!$!!!!!!!!!!!!!!>!!!!!%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!%!!!!!%!!!!!!!!!""%!!-!!!!!!1!!!!!!!!!!F!5!!!!!!!!!!!!!!!!!!"!!!!!!!!!!!!!!!!$!!#!!!!%!!!!(!!!!!!!!!!!!!!!!!!%!!!+!!!!!!!!!1!!!!!*.!!!!"*'!1!!!!!!!!!#!!!!!!!!!!%!!!!!!!!!!!!!!!!!!"!!!L!!!!!!!!!!!!!!!!!!!!!"!!!!!!$!!!!!!!!!!!%!2!!!!!F!>!%%F!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!L!!!!--!!!!!!!!!!!!!!%"!!!4!!FF!!!!!!!!!,!!F!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"!!!!!!!2$!!!2"*!!!!!!!!!!!T!!!!!!!!!!!!!!!!!!!0!!!!!!!!!!!!!!!!!!!!!!!!!!!!>!2%!!!!!!!!!!!!!!!!!!8FF!!!!!!8!!!!!!!!!!!3!!!!!!O!!!!!!!!!!!!!!!"!!!!!#>!!!!!!!!!F!#!!!!!!!!!!!!!!88!83!F!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!$!!!!!0!>!$!58FF!!!!5!"]!!8!!!!!O!!!!!!"!!!!!!"!*!8!*!O!!8!!F!!2!!!!%!!!!!>#!!!*!!!!!!!5F"""
 	c="""1	10006	N	721	CCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC+1TCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC-1NCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC^/C^!C^/C^.C^/C^*C^!C^!C^!C^>C^!C^!C^!C^!C^>C^!C^!C^!C^!C^$C^!C^*C^!C^*C^$C^)C^%C^>C^!C^!C^!C^!C^/C^!C^*C^!C^$C^$C^!C^!C^*C^!C^*C^!C^*C^!C^*C^>C^*C^/C^/C^*C^!C^/C^!C^!C^!C^*C^$C^>C^!C^!C^!C^*C^*C^!C^!C^>C^!C^2C^0C^!C^-C^$C^$C^*C^!C^$C^$C^$C^3C^!C^$C^!C^$C^2C^>C^>C^$C^1C^!C^!C^$C^!C^$C^!C^$C^4C^$C^>C^*C^!C^*C^*C^!C^!C^>C^!C^2C^!C^$C^>C^>C^*C^>C^*C^>C^!C^!C^!C^$C^1C^0C^!C^*C^!C^$C^$C^1C^$C	::#;CD6#8<;2##<<;<<;<<<<<<<<<<<<<<<;<<<;;;;<<<;<<<<<;<;;<<<;;<;<;<<;<;<?>><>>:>;?;;<>ADDDDADAADDDDDDDDDDDABDABDAD:BCDDD>=<?<<<<<<<=<==<====<=<=<====<<<===<=<=<<==<===<<<<===<<<==<=<=<=<==<??;=??;D@@AAA@@D@D@CDCCDADD@DDDAD;=================================================?@=6?===BCBB=BCBCCA+AACAACCD244A?=7CCABB8CCCCCAAA>>>>>>>>>>>>=<>>>>>>>>>>>>>>>>>>>>=>>>>>>>>>>>>>>>=>=>>>>=>>>>==>>B?>??>>;BACCCCCCBBC>CCCBC;@C>C?@CC@CCCCC??CCBDCC?>0BBBBBBBABABBBBBBBBABBABBBBBBBBBBBBBBBBBBBBABBBBBBBBABBBBBBBBBBBBBBABBBBBBB?BBBBBBBBBBB==><====>=>>=CCCBCCCCCBCCCCCCCCBCBCCCCCCCCCCCBBCCCC@DBAAACCCBAAAD9C=9@@@9?@9@99@@9=@9@9@99@9@@9@@?@9999=A;A9A999@AA99AAA?9AA@AA9AA9>AA;A;?A:;CCCCCCCCC@@@@@@CC@CCCCCC@C@C@CCCCACCCCAACCAA7CBBBAC=CCCCA	!!+!!!+!!!*!*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"!!!!!!!!!!!!!"!!!!!!!!!-$!-*!$!-0!>!!!!!"!>!0!%!!!>!!!!!!!%!!!!!!!!>!%!!**-!!!5!!!!!!!!!"!!!!!!!!!!!!!!!!!!!!$"!""!!!!!!!"!!!!"!!!!!!!!!!!!!!!!>*+!!!%!-!!$>*!>!!!!!!!!*!!!!!!!!!!!!!!!!$*8!!!!!!/!!!!!!!!!!!!$!!!!!!!!!!*!!!!+2!2!!!*!$>!%!!*!!!!$%$$*3!!>$!!,$$!5$!>$!!!$!*$!!!$$!!!!!*!*/.!!!!!'*!*!!$!!**!!!!!!!!/5!!!:**!!!*$!&$!!*!$$!!*/!">!>5!!!!2!!!!*$$!!!*$$$$!$!$!$!!!*$!$3$$0*2!!0!0!0-*!3/!'/!!!!!!!*!*!*!/!$!!$*!$!'!!/!!!!!!!/"$!$!$*!$!!!!!/!!!"!!!&!*!//"!$!!!!!!!!!!>!$/!$!!""!!+*!!&!*3>!!!*$%3!!$!*$*!!!$(!!!!$$!!8!!$!$!!*!*$****7!$>!1!!/!/./*!!!>!!!!>!!!!$!*!*$)%>!!!!/!*!$$!!*!*!*!*>*//*!/!!!*$>!!!**!!>!20!-$$*!$$$3!$!$2>>$1!!$!$!$4$>*!**!!>!2!$>>*>*>!!!$10!*!$$1$"""
 	t=t.strip().split()
 	c=c.strip().split()
 	treatment=analyze_one_position(t,5,0,30)
 	control=analyze_one_position(c,5,0,30)
-	
-	treatment_mutation=treatment[0]
-	control_mutation=control[0]
-	treatment_mutation_p=probability_calculation_for_mutation_test(treatment[0],treatment[3],'A')
-	print treatment_mutation_p
-	control_mutation_p=probability_calculation_for_mutation_test(control[0],control[3],'A')
-	print control_mutation_p
-	
-	weighted_fisher_test_for_mutation_test(treatment_mutation_p,control_mutation_p)
-	#print weighted_fisher_test_for_deletion(treatment_mutation_p,control_mutation_p,1500,720,0.01)
-	#print weighted_fisher_test_for_mutation(treatment_mutation_p,control_mutation_p,0.5)
-	#print scipy.stats.fisher_exact([[1000,10],[1000,1]],alternative="less")[1]
-	#print weighted_fisher_test_for_strand(treatment_mutation_p,0.5)
+	print treatment[1],treatment[2]
+	treatment_mutation_p=probability_calculation_for_mutation(treatment,'A')
+	control_mutation_p=probability_calculation_for_mutation(control,'A')
+	print mutation_test(treatment_mutation_p,control_mutation_p)
+	print "strand bias",strand_bias_test(treatment,'A')
+	print time.time()-a,"L"
 	
 	
 def initiate(workspace,chrom):
