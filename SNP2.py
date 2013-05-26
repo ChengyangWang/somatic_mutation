@@ -13,6 +13,7 @@ import scipy
 import scipy.stats
 import scipy.misc
 from scipy.special import beta
+from scipy.special import betainc
 from scipy.misc import comb
 from optparse import OptionParser
 
@@ -66,12 +67,43 @@ def insertion_filter(map_quality,map_quality_cutoff):
 	else:
 		return False
 	return map_p
-	
+
+def minimum_mutation_counts(mutation_observation_counts,mutation_observation_counts_cutoff):
+	if mutation_observation_counts>mutation_observation_counts_cutoff:
+		return True
+	else:
+		return False
+		
 def char_to_quality(char):
 	return ord(char)-33
 	
 def quality_to_probability(quality):
 	return math.pow(10,-quality/10.0)
+
+def weighted_avg(values, weights):
+    """
+    Returns the weighted average
+    """
+    V1=sum(weights)
+    return sum(map(lambda x,y:x*y,values,weights))/V1
+    #norm_weights=weights/V1
+    #average=numpy.dot(values, norm_weights)
+    #p_estimate=average/float(depth)
+    #
+    #V2=(norm_weights**2).sum()
+    #D2=average*(1-p_estimate)
+    #D22=numpy.dot(weights, (values-average)**2)/(1-V2)
+    #return (p_estimate,V2*D22/(depth**2))
+    
+def parser_one_base_dic(base_dic):
+	base_list=base_dic.items()
+	base_list.sort(key=lambda x:x[1],reverse=True)
+	return [v[0] for i in range(4) if base_list[i][1]!=0]  ###include the most frenquency values
+	
+def parser_two_base_dic(first_base_dic,second_base_dic):
+	merge_list=[(key,first_base_dic[key]+second_base_dic[key]) for key in ['A','T','C','G']]
+	merge_list.sort(key=lambda x:x[1],reverse=True)
+	return [v[0] for i in range(4) if merge_list[i][1]!=0]	###include the most frenquency values
 
 
 def analyze_one_position(line,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff):  ###analyze a list of line in mpileup
@@ -194,7 +226,7 @@ def analyze_one_position(line,base_quality_cutoff,map_quality_cutoff,sequencing_
 	
 	print "read data for certain site",time.time()-start
 	return [mutation_result,deletion_result,insertion_result,mutation_plus,mutation_minus,len(mutation_result),plus_depth,minus_depth] 
-	## extract information on specific region if neither deletion nor insertion is information available, return [] for certain content
+	### extract information on specific region if neither deletion nor insertion is information available, return [] for certain content
 	### mutation_result [[base,base_p,map_p].....]
 	### deletion_result [[base_p,map_p].....]
 	### insertion_result
@@ -385,12 +417,13 @@ def probability_calculation_for_mutation(analyse_result,mutation):
 	print 'f',time.time()-a
 	return [pre_update,pre_update_plus,pre_update_minus] ###[[p,p,p,..],absolute_lower_bound,absolute_upper_bound] 
 	
-def probability_calculation_for_deletion(deletion_result):
+def probability_calculation_for_deletion(analyse_result):
 	pre_update=[1.0]
 	post_update=[]
+	deletion_result=analyse_result[1]
+	depth=analyse_result[5]
 	
 	for i in range(len(deletion_result)):
-		
 		base_p=deletion_result[i][0]
 		map_p=deletion_result[i][1]
 		
@@ -404,19 +437,23 @@ def probability_calculation_for_deletion(deletion_result):
 		post_update=[]
 			
 		
-	return pre_update ###[p,p,p,..] 
+	return [pre_update,depth] ###[[p,p,p,..],sequencing_depth], when deletion is null, return [1.0]
 
-def probability_calculation_for_insertion(insertion_result):
+def probability_calculation_for_insertion(analyse_result):
+	insertion_result=analyse_result[2]
+	depth=analyse_result[5]
+	
 	if insertion_result==[]:
-		return [[[]],[[]]]
+		return [[],[],depth]
+	
 	max_insertion_length=max([len(v[0]) for v in insertion_result])
 	pre_update_list=[]
 	post_update_list=[]
-	base_list=[]
+	base_dic_list=[]
 	for i in range(max_insertion_length):
 		pre_update_list.append([1.0])
 		post_update_list.append([])
-		base_list.append([])
+		base_dic_list.append({'A':0,'T':0,'C':0,'G':0})
 		
 	
 	for i in range(len(insertion_result)):
@@ -432,16 +469,32 @@ def probability_calculation_for_insertion(insertion_result):
 			post_update_list[v].append((1-map_p)*pre_update_list[v][-1])
 			
 			
-			base_list[v].append(base.upper())
+			base_dic_list[v][base.upper()]+=1
 			pre_update_list[v]=post_update_list[v]
 			post_update_list[v]=[]
 	
-	
-	for i in range(len(base_list)):
-		base_list[i]=Counter(base_list[i]).most_common(1)
-	
-	return [pre_update_list,base_list] ###for each position[[p,p,p,p,p],[p,p,p,p],[p]],['A','G'...]
+	return [pre_update_list,base_dic_list,depth] ###[[first_position_p_list,second_position_p_list,...],[{},{},{}....],depth]
 
+
+def SNP_dicision(treatment_mutation_probability,control_mutation_probability,SNP_cutoff):  ##return observation by the way
+	treatment_p=treatment_mutation_probability[0]
+	treatment_p_lower=treatment_mutation_probability[1]
+	treatment_p_upper=treatment_mutation_probability[2]
+	treatment_depth=treatment_mutation_probability[3]
+	
+	treatment_observation=weighted_avg(range(treatment_p_lower,treatment_p_upper+1), treatment_p)
+	
+	control_p=control_mutation_probability[0]
+	control_p_lower=control_mutation_probability[1]
+	control_p_upper=control_mutation_probability[2]
+	control_depth=control_mutation_probability[3]
+	
+	control_observation=weighted_avg(range(control_p_lower,control_p_upper+1),control_p)
+	
+	if (treatment_observation+control_observation)/(treatment_depth+control_depth)>=SNP_cutoff:
+		return True
+	else:
+		return False
 
 def strand_bias_test(analyse_result,mutation):
 	treatment_plus_mutation=analyse_result[3][mutation]
@@ -450,41 +503,53 @@ def strand_bias_test(analyse_result,mutation):
 	treatment_minus_not_mutation=analyse_result[7]-treatment_minus_mutation
 	fisher_p_value=scipy.stats.fisher_exact([[treatment_plus_not_mutation,treatment_plus_mutation],[treatment_minus_not_mutation,treatment_minus_mutation]],alternative="two-sided")[1]
 	return fisher_p_value
-	
-def weighted_avg(values, weights):
-    """
-    Returns the weighted average
-    """
-    V1=sum(weights)
-    return sum(map(lambda x,y:x*y,values,weights))/V1
-    #norm_weights=weights/V1
-    #average=numpy.dot(values, norm_weights)
-    #p_estimate=average/float(depth)
-    #
-    #V2=(norm_weights**2).sum()
-    #D2=average*(1-p_estimate)
-    #D22=numpy.dot(weights, (values-average)**2)/(1-V2)
-    #return (p_estimate,V2*D22/(depth**2))
-    
-def mutation_test(treatment_probability_list,control_probability_list):
+
+def somatic_mutation_test(treatment_mutation_probability,control_mutation_probability):
 	a=time.time()
-	treatment_p=treatment_probability_list[0]
-	treatment_p_lower=treatment_probability_list[1]
-	treatment_p_upper=treatment_probability_list[2]
-	treatment_depth=treatment_probability_list[3]
+	treatment_p=treatment_mutation_probability[0]
+	treatment_p_lower=treatment_mutation_probability[1]
+	treatment_p_upper=treatment_mutation_probability[2]
+	treatment_depth=treatment_mutation_probability[3]
 	
 	treatment_observation=weighted_avg(range(treatment_p_lower,treatment_p_upper+1), treatment_p)
 	
-	control_p=control_probability_list[0]
-	control_p_lower=control_probability_list[1]
-	control_p_upper=control_probability_list[2]
-	control_depth=control_probability_list[3]
+	control_p=control_mutation_probability[0]
+	control_p_lower=control_mutation_probability[1]
+	control_p_upper=control_mutation_probability[2]
+	control_depth=control_mutation_probability[3]
 	
 	p_value=0.0
-	#print treatment_observation
-	#print range(control_p_lower+1,control_p_upper+2)
-	#print range(control_depth-control_p_lower+1,control_depth-control_p_upper,-1)
-	 
+	
+	B_denominator=map(lambda x,y:betainc(x,y,0.5),range(control_p_lower+1,control_p_upper+2),range(control_depth-control_p_lower+1,control_depth-control_p_upper,-1))
+	for extreme in range(int(treatment_observation),-1,-1):
+		print extreme
+		B_numerator=map(beta,range(extreme+control_p_lower+1,extreme+control_p_upper+2),range(treatment_depth+control_depth-extreme-control_p_lower+1,treatment_depth+control_depth-extreme-control_p_upper,-1))
+		med=sum(map(lambda x,y,z:x*y/z,control_p,B_numerator,B_denominator))
+		additional_p_value=med*int(comb(treatment_depth,extreme))
+		#print additional_p_value
+		if additional_p_value<=1e-10:
+			p_value+=additional_p_value
+			return 1-p_value
+		else:
+			p_value+=additional_p_value
+	return 1-p_value
+
+def SNP_mutation_test(treatment_mutation_probability,control_mutation_probability):
+	a=time.time()
+	treatment_p=treatment_mutation_probability[0]
+	treatment_p_lower=treatment_mutation_probability[1]
+	treatment_p_upper=treatment_mutation_probability[2]
+	treatment_depth=treatment_mutation_probability[3]
+	
+	treatment_observation=weighted_avg(range(treatment_p_lower,treatment_p_upper+1), treatment_p)
+	
+	control_p=control_mutation_probability[0]
+	control_p_lower=control_mutation_probability[1]
+	control_p_upper=control_mutation_probability[2]
+	control_depth=control_mutation_probability[3]
+	
+	p_value=0.0
+	
 	B_denominator=map(lambda x,y:beta(x,y),range(control_p_lower+1,control_p_upper+2),range(control_depth-control_p_lower+1,control_depth-control_p_upper,-1))
 	for extreme in range(int(treatment_observation),-1,-1):
 		print extreme
@@ -499,198 +564,107 @@ def mutation_test(treatment_probability_list,control_probability_list):
 			p_value+=additional_p_value
 	return 1-p_value
 
-#def weighted_fisher_test_for_mutation_test(treatment,control):
-	a=time.time()
-	treatment_read_depth=len(treatment[0])-1
-	control_read_depth=len(control[0])-1
-	treatment_mean_variance=weighted_avg_and_std(numpy.array(range(treatment_read_depth+1)), numpy.array(treatment[0]),1490)
-	control_mean_variance=weighted_avg_and_std(numpy.array(range(control_read_depth+1)), numpy.array(control[0]),717)
-	b=(treatment_mean_variance[0]-control_mean_variance[0])/math.sqrt(treatment_mean_variance[1]+control_mean_variance[1])
-	print treatment_mean_variance[0]*1490,control_mean_variance[0]*717
-	print 1-scipy.stats.norm.cdf(b)
+def deletion_test(treatment_deletion_probability,control_deletion_probability):
+	treatment_p=treatment_deletion_probability[0]
+	treatment_deletion_counts=len(treatment_p)-1
+	treatment_depth=treatment_deletion_probability[1]
 	
+	treatment_observation=weighted_avg(range(treatment_deletion_counts+1), treatment_p)
 	
-	print "l",time.time()-a
-	
-#def weighted_fisher_test_for_mutation(treatment,control,accuracy):
-	a=time.time()
-	treatment_read_depth=len(treatment[0])-1
-	control_read_depth=len(control[0])-1
-	
-	approximate_cutoff=math.sqrt(accuracy/(treatment_read_depth*control_read_depth))
-	
-	treatment_index=[]
-	for i in range(len(treatment[0])):
-		if treatment[0][i]>=approximate_cutoff:
-			treatment_index.append(i)
-	
-	control_index=[]
-	for i in range(len(control[0])):
-		if control[0][i]>=approximate_cutoff:
-			control_index.append(i)
-	
+	control_p=control_deletion_probability[0]
+	control_deletion_counts=len(control_p)-1
+	control_depth=control_deletion_probability[1]
 	
 	p_value=0.0
-	for i in treatment_index:
-		for j in control_index:
-			treatment_match=i
-			control_match=j
-			treatment_mismatch=treatment_read_depth-i
-			control_mismatch=control_read_depth-j
-			fisher_p_value=scipy.stats.fisher_exact([[treatment_mismatch,treatment_match],[control_mismatch,control_match]],alternative="less")[1]
-			p_value+=fisher_p_value*treatment[0][i]*control[0][j]
-			
-	print "l",time.time()-a
-	return p_value
 	
-#def weighted_fisher_test_for_strand(treatment,accuracy):
-	treatment_plus_read_depth=len(treatment[1])-1
-	treatment_minus_read_depth=len(treatment[2])-1
+	if control_deletion_counts==0:
+		for extreme in range(int(treatment_observation),-1,-1):
+			additional_p_value=int(comb(treatment_depth,extreme))*beta(extreme+1,treatment_depth+control_depth-extreme+1)/beta(1,control_depth+1)
+			if additional_p_value<=1e-10:
+				p_value+=additional_p_value
+				return 1-p_value
+			else:
+				p_value+=additional_p_value
+		return 1-p_value
 	
-	
-	approximate_cutoff=math.sqrt(accuracy/(treatment_plus_read_depth*treatment_minus_read_depth))
-	
-	plus_index=[]
-	for i in range(len(treatment[1])):
-		if treatment[1][i]>=approximate_cutoff:
-			plus_index.append(i)
-			
-	
-	
-	minus_index=[]
-	for i in range(len(treatment[2])):
-		if treatment[2][i]>=approximate_cutoff:
-			minus_index.append(i)
-			
-	
-			
+
+	B_denominator=map(lambda x,y:beta(x,y),range(1,control_deletion_counts+2),range(control_depth+1,control_depth-control_deletion_counts,-1))
+	for extreme in range(int(treatment_observation),-1,-1):
 		
-	p_value_strand=0.0
-	for i in plus_index:
-		for j in minus_index:
-			plus_match=i
-			minus_match=j
-			plus_mismatch=treatment_plus_read_depth-i
-			minus_mismatch=treatment_minus_read_depth-j
-			fisher_p_value=scipy.stats.fisher_exact([[plus_mismatch,plus_match],[minus_mismatch,minus_match]])[1]
-			p_value_strand+=fisher_p_value*treatment[1][i]*treatment[2][j]
-			
-	return p_value_strand	
+		B_numerator=map(beta,range(extreme+1,extreme+control_deletion_counts+2),range(treatment_depth+control_depth-extreme+1,treatment_depth+control_depth-extreme-control_deletion_counts,-1))
+		med=sum(map(lambda x,y,z:x*y/z,control_p,B_numerator,B_denominator))
+		additional_p_value=med*int(comb(treatment_depth,extreme))
+		#print additional_p_value
+		if additional_p_value<=1e-10:
+			p_value+=additional_p_value
+			return 1-p_value
+		else:
+			p_value+=additional_p_value
+	return 1-p_value
+
+def insertion_test(treatment_insertion_probability,control_insertion_probability):
+	###[[first_position_p_list,second_position_p_list,...],[{},{},{}....],depth]
 	
-def weighted_fisher_test_for_deletion(treatment,control,treatment_mutation_depth,control_mutation_depth,accuracy):
+	max_treatment_insertion_length=len(treatment_insertion_probability[0])
+	max_control_insertion_length=len(control_insertion_probability[0])
 	
+	treatment_depth=treatment_insertion_probability[2]
+	control_depth=control_insertion_probability[2]
 	
-	treatment_deletion_depth=len(treatment)-1
-	control_deletion_depth=len(control)-1
-	
-	
-	
-	if control_deletion_depth==0:
-	
-		p_value=0.0
-		approximate_cutoff=math.sqrt(accuracy/treatment_deletion_depth)
-		
-		treatment_index=[]
-		for i in range(len(treatment)):
-			if treatment[i]>=approximate_cutoff:
-				treatment_index.append(i)
-		
-		for i in treatment_index:
-			
-			treatment_deletion=i
-			control_deletion=0
-			treatment_not_deletion=treatment_mutation_depth
-			control_not_deletion=control_mutation_depth
-			print treatment_not_deletion,treatment_deletion,control_not_deletion,control_deletion
-			fisher_p_value=scipy.stats.fisher_exact([[treatment_not_deletion,treatment_deletion],[control_not_deletion,control_deletion]],alternative="less")[1]
-			p_value+=fisher_p_value*treatment[i]
-			
-		return p_value 
-			
-	else:
-	
-		p_value=0.0
-		approximate_cutoff=math.sqrt(accuracy/(treatment_deletion_depth*control_deletion_depth))
-	
-		treatment_index=[]
-		for i in range(len(treatment)):
-			if treatment[i]>=approximate_cutoff:
-				treatment_index.append(i)
-	
-		control_index=[]
-		for i in range(len(control)):
-			if control[i]>=approximate_cutoff:
-				control_index.append(i)
-				
-		for i in treatment_index:
-			for j in control_index:
-				
-				treatment_deletion=i
-				control_deletion=j
-				treatment_not_deletion=treatment_mutation_depth
-				control_not_deletion=control_mutation_depth
-				fisher_p_value=scipy.stats.fisher_exact([[treatment_not_deletion,treatment_deletion],[control_not_deletion,control_deletion]],alternative="less")[1]
-				p_value+=fisher_p_value*treatment[i]*control[j]
-				
-		return p_value
-				
-def weighted_fisher_test_for_insertion(treatment,control,treatment_mutation_depth,control_mutation_depth,accuracy):
-	max_treatment_insertion_length=len(treatment[0])
-	max_control_insertion_length=len(control[0])
 	p_value_list=[]
+	allele_list=[]
+	
 	for position in range(max_treatment_insertion_length):
+		allele_list.append(parser_one_base_dic(treatment_insertion_probability[1][position])[0])
 		if position<=max_control_insertion_length-1:
 		
-			treatment_insertion_depth=len(treatment[0][position])-1
-			control_insertion_depth=len(control[0][position])-1
-			p_value=0.0
-			approximate_cutoff=math.sqrt(accuracy/(treatment_insertion_depth*control_insertion_depth))
+			treatment_p=treatment_insertion_probability[0][position]
+			treatment_insertion_counts=len(treatment_p)-1
 			
-			treatment_index=[]
-			for i in range(len(treatment[0][position])):
-				if treatment[0][position][i]>=approximate_cutoff:
-					treatment_index.append(i)
-	
-			control_index=[]
-			for i in range(len(control[0][position])):
-				if control[0][position][i]>=approximate_cutoff:
-					control_index.append(i)
-				
-			for i in treatment_index:
-				for j in control_index:
-					
-					treatment_insertion=i
-					control_insertion=j
-					treatment_not_insertion=treatment_mutation_depth
-					control_not_insertion=control_mutation_depth
-					fisher_p_value=scipy.stats.fisher_exact([[treatment_not_insertion,treatment_insertion],[control_not_insertion,control_insertion]],alternative="less")[1]
-					p_value+=fisher_p_value*treatment[0][position][i]*control[0][position][j]
-					
+			treatment_observation=weighted_avg(range(treatment_insertion_counts+1), treatment_p)
+			
+			control_p=control_insertion_probability[0][position]
+			control_insertion_counts=len(control_p)-1
+			
+			p_value=0.0
+			
+			B_denominator=map(lambda x,y:beta(x,y),range(1,control_insertion_counts+2),range(control_depth+1,control_depth-control_insertion_counts,-1))
+			for extreme in range(int(treatment_observation),-1,-1):
+		
+				B_numerator=map(beta,range(extreme+1,extreme+control_insertion_counts+2),range(treatment_depth+control_depth-extreme+1,treatment_depth+control_depth-extreme-control_insertion_counts,-1))
+				med=sum(map(lambda x,y,z:x*y/z,control_p,B_numerator,B_denominator))
+				additional_p_value=med*int(comb(treatment_depth,extreme))
+				#print additional_p_value
+				if additional_p_value<=1e-10:
+					p_value+=additional_p_value
+					p_value_list.append(1-p_value)
+				else:
+					p_value+=additional_p_value
+			p_value_list.append(1-p_value)
+			
 		else:
 			
-			treatment_insertion_depth=len(treatment[0][position])-1
+			treatment_p=treatment_insertion_probability[0][position]
+			treatment_insertion_counts=len(treatment_p)-1
+			
+			treatment_observation=weighted_avg(range(treatment_insertion_counts+1), treatment_p)
 			
 			p_value=0.0
-			approximate_cutoff=math.sqrt(accuracy/treatment_insertion_depth)
 			
-			treatment_index=[]
-			for i in range(len(treatment[0][position])):
-				if treatment[0][position][i]>=approximate_cutoff:
-					treatment_index.append(i)
-	
-			
-			for i in treatment_index:
+			for extreme in range(int(treatment_observation),-1,-1):
+				additional_p_value=int(comb(treatment_depth,extreme))*beta(extreme+1,treatment_depth+control_depth-extreme+1)/beta(1,control_depth+1)
+				if additional_p_value<=1e-10:
+					p_value+=additional_p_value
+					p_value_list.append(1-p_value)
+				else:
+					p_value+=additional_p_value
 				
-				treatment_insertion=i
-				control_insertion=0
-				treatment_not_insertion=treatment_mutation_depth
-				control_not_insertion=control_mutation_depth
-				fisher_p_value=scipy.stats.fisher_exact([[treatment_not_insertion,treatment_insertion],[control_not_insertion,control_insertion]],alternative="less")[1]
-				p_value+=fisher_p_value*treatment[0][position][i]
-				
-		p_value_list.append(p_value)
+			p_value_list.append(p_value)
 	
-	return p_value_list
+	
+	
+	return [p_value_list,allele_list]  #####[[pvalue...],[allele...]]
+	
 
 def main():
 	a=time.time()
@@ -707,20 +681,22 @@ def main():
 	print "strand bias",strand_bias_test(treatment,'A')
 	print time.time()-a,"L"
 	
+def write_mutation_file():
+	file.writelines("chrom\tposition\tref_allele\ttumor_sample\ttumor_depth\tcontrol_sample\tcontrol_depth\tSNV_kind\talter_allele\tfraction_in_tumor\tfraction_in_normal\tp_value\tfdr\n")
+	
+def write_string(string,chrom,position,ref_allele="*",tumor_depth,control_sample,control_depth,SNV_kind,alter_allele,fraction_in_tumor,fraction_in_normal,p_value,fdr="*"):
+	string+=
 	
 def initiate(workspace,chrom):
 	file=open(workspace+'/'+chrom+'_'+'variants.txt','w')
 	file.close()
 	return workspace+'/'+chrom+'_'+'variants.txt'
 	
-def handle_files_and_output(treatment_bam,control_bam,output_path,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff,start,reading_length=100000,accuracy=1e-2):
+def handle_specific_segment_on_certain_chrom(chrom,treatment_bam,control_bam,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff,start,reading_length=100000):
 	
-	chrom=1
+	output_string=""
 	treatment_list=generate_mpileup_for_each_chrom_on_specific_region(treatment_bam,chrom,start,reading_length).strip().split("\n")
 	control_list=generate_mpileup_for_each_chrom_on_specific_region(control_bam,chrom,start,reading_length).strip().split("\n")
-	
-	output_file=open(output_path,'w+')  ###
-	
 	
 	treatment_length=len(treatment_list)
 	control_length=len(control_list)
