@@ -476,22 +476,9 @@ def probability_calculation_for_insertion(analyse_result):
 	return [pre_update_list,base_dic_list,depth] ###[[first_position_p_list,second_position_p_list,...],[{},{},{}....],depth]
 
 
-def SNP_dicision(treatment_mutation_probability,control_mutation_probability,SNP_cutoff):  ##return observation by the way
-	treatment_p=treatment_mutation_probability[0]
-	treatment_p_lower=treatment_mutation_probability[1]
-	treatment_p_upper=treatment_mutation_probability[2]
-	treatment_depth=treatment_mutation_probability[3]
+def SNP_dicision(treatment_mutation_fraction,control_mutation_fraction,SNP_cutoff):  ##return observation by the way
 	
-	treatment_observation=weighted_avg(range(treatment_p_lower,treatment_p_upper+1), treatment_p)
-	
-	control_p=control_mutation_probability[0]
-	control_p_lower=control_mutation_probability[1]
-	control_p_upper=control_mutation_probability[2]
-	control_depth=control_mutation_probability[3]
-	
-	control_observation=weighted_avg(range(control_p_lower,control_p_upper+1),control_p)
-	
-	if (treatment_observation+control_observation)/(treatment_depth+control_depth)>=SNP_cutoff:
+	if treatment_mutation_fraction>=SNP_cutoff and control_mutation_fraction>=SNP_cutoff:
 		return True
 	else:
 		return False
@@ -504,7 +491,7 @@ def strand_bias_test(analyse_result,mutation):
 	fisher_p_value=scipy.stats.fisher_exact([[treatment_plus_not_mutation,treatment_plus_mutation],[treatment_minus_not_mutation,treatment_minus_mutation]],alternative="two-sided")[1]
 	return fisher_p_value
 
-def somatic_mutation_test(treatment_mutation_probability,control_mutation_probability):
+#def somatic_mutation_test(treatment_mutation_probability,control_mutation_probability):
 	a=time.time()
 	treatment_p=treatment_mutation_probability[0]
 	treatment_p_lower=treatment_mutation_probability[1]
@@ -534,7 +521,7 @@ def somatic_mutation_test(treatment_mutation_probability,control_mutation_probab
 			p_value+=additional_p_value
 	return 1-p_value
 
-def SNP_mutation_test(treatment_mutation_probability,control_mutation_probability):
+def somatic_mutation_test(treatment_mutation_probability,control_mutation_probability):
 	a=time.time()
 	treatment_p=treatment_mutation_probability[0]
 	treatment_p_lower=treatment_mutation_probability[1]
@@ -547,6 +534,8 @@ def SNP_mutation_test(treatment_mutation_probability,control_mutation_probabilit
 	control_p_lower=control_mutation_probability[1]
 	control_p_upper=control_mutation_probability[2]
 	control_depth=control_mutation_probability[3]
+	
+	control_observation=weighted_avg(range(control_p_lower,control_p_upper+1), control_p)
 	
 	p_value=0.0
 	
@@ -562,7 +551,8 @@ def SNP_mutation_test(treatment_mutation_probability,control_mutation_probabilit
 			return 1-p_value
 		else:
 			p_value+=additional_p_value
-	return 1-p_value
+	
+	return (1-p_value,treatment_observation/float(treatment_depth),control_observation/float(control_depth),treatment_depth,control_depth) ###p_value,treatment_fraction,control_fraction,treatment_depth,control_depth
 
 def deletion_test(treatment_deletion_probability,control_deletion_probability):
 	treatment_p=treatment_deletion_probability[0]
@@ -585,8 +575,9 @@ def deletion_test(treatment_deletion_probability,control_deletion_probability):
 				return 1-p_value
 			else:
 				p_value+=additional_p_value
-		return 1-p_value
+		return (1-p_value,treatment_observation/float(treatment_depth),0.0,treatment_depth,control_depth)
 	
+	control_observation=weighted_avg(range(control_deletion_counts+1), control_p)
 
 	B_denominator=map(lambda x,y:beta(x,y),range(1,control_deletion_counts+2),range(control_depth+1,control_depth-control_deletion_counts,-1))
 	for extreme in range(int(treatment_observation),-1,-1):
@@ -600,7 +591,7 @@ def deletion_test(treatment_deletion_probability,control_deletion_probability):
 			return 1-p_value
 		else:
 			p_value+=additional_p_value
-	return 1-p_value
+	return (1-p_value,treatment_observation/float(treatment_depth),control_observation/float(control_depth),treatment_depth,control_depth)  ##pvalue treatment_fraction control_fraction treatment_depth control_depth
 
 def insertion_test(treatment_insertion_probability,control_insertion_probability):
 	###[[first_position_p_list,second_position_p_list,...],[{},{},{}....],depth]
@@ -613,6 +604,8 @@ def insertion_test(treatment_insertion_probability,control_insertion_probability
 	
 	p_value_list=[]
 	allele_list=[]
+	treatment_fraction_list=[]
+	control_fraction_list=[]
 	
 	for position in range(max_treatment_insertion_length):
 		allele_list.append(parser_one_base_dic(treatment_insertion_probability[1][position])[0])
@@ -625,6 +618,8 @@ def insertion_test(treatment_insertion_probability,control_insertion_probability
 			
 			control_p=control_insertion_probability[0][position]
 			control_insertion_counts=len(control_p)-1
+			
+			control_observation=weighted_avg(range(control_insertion_counts+1), control_p)
 			
 			p_value=0.0
 			
@@ -641,6 +636,8 @@ def insertion_test(treatment_insertion_probability,control_insertion_probability
 				else:
 					p_value+=additional_p_value
 			p_value_list.append(1-p_value)
+			treatment_fraction_list.append(treatment_observation/float(treatment_depth))
+			control_fraction_list.append(control_observation/float(control_depth))
 			
 		else:
 			
@@ -648,6 +645,7 @@ def insertion_test(treatment_insertion_probability,control_insertion_probability
 			treatment_insertion_counts=len(treatment_p)-1
 			
 			treatment_observation=weighted_avg(range(treatment_insertion_counts+1), treatment_p)
+			control_observation=0.0
 			
 			p_value=0.0
 			
@@ -660,13 +658,14 @@ def insertion_test(treatment_insertion_probability,control_insertion_probability
 					p_value+=additional_p_value
 				
 			p_value_list.append(p_value)
+			treatment_fraction_list.append(treatment_observation/float(treatment_depth))
+			control_fraction_list.append(control_observation/float(control_depth))
 	
 	
 	
-	return [p_value_list,allele_list]  #####[[pvalue...],[allele...]]
+	return [p_value_list,allele_list,treatment_fraction_list,control_fraction_list]  #####[[pvalue...],[allele...],[treatment_fraction...],[control_fraction...]]
 	
-
-def main():
+def test():
 	a=time.time()
 	t="""1	10017	N	1500	CCCCCCcCC+2CTCC*CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCACCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC+2CTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCC+2CTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC*CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCACCCCCCCCCCCCCCCCCCCCCCCCCCC+2CTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCccccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcccccccCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCccccc^!C^!C^!C^5C^!C^"C^]C^!C^!C^8C^!C^!C^!C^!C^!C^OC^!C^!C^!C^!C^!C^!C^"C^!C^!C^!C^!C^!C^!C^"C^!C^*C^!C^8C^!C^*C^!C^OC^!C^!C^8C^!C^!C^FC^!C^!C^2C^!C^!C^!C^!C^%C^!C^!C^!C^!C^!C^>C^#C^!C^!C^!C^*C^!C^!C^!C^!C^!C^!c^!c^5c^Fc	91#9DE7#5988##99999999999999999999999999999:999999999999999999999999999?9??>?????????DEEEEDEEDEEEEEEEEEEEFEEFFEFE@EEEEE?>??999:9999999999999999999999999999999999999999999999999999999999999???????EDDDD@DDEDEEDEEEEEEEFEEE=E?9999999999999999999999999999999899999:9999999999>;??#;?>?DDDDDDDDEED@DDCDDEEEE>EDDDEEEDDDDDDEEEEEE999999999999:999999999999999999999:9999999999999999999999:9999::9>>?>??>??DDEEEEDDDBE;EEEDDD;EDDDDDDDDDDDDEEEDEEDC?>7::9::99:9:9::9999::9::99:99:99::9::9:::999::99:9::::99:::9::99::::::99:::::9:9:::9:::9>>>>>>?>@>??>9DDDDDDDDDDDDDDDDDDDDEEEEEEEEEDDDDEEEEDFDCDDDDDEDDDFDD>::::::::::::::::9:9:99:9::9::::999:::::::::::::::::::9:::::9::9::>1?>??>>DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD>DDDDCDDDDEDDDDDED@DDDD?::::::::::::::::::::::::::9:::::::>?>?><DCCDDDDDDDDDDDDDDDDDDDDEDDDDBD:::::::::6::::::::::::::::::::':::::::::??9DDDDCCDDDDDDDDD@DDDDDDDDDDDDC:;::::;:;;;;;;;:::;:::;;:;;:;;;;;9;:;::;;::;:;;;;:;:6:;=?:==>CD<CDDDDCD2DCDCCDCDDDA=DDDDDDDD>?455;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;<=<<C>DCACCDCDDDDA;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;<;;;;=6?;<<>DCCCDDBBBB:DDDDDBDBC<><;;<;;<;;;;<;;<;<;;<<<;;;<<<<;<;<<;<<>;<>>;DD>D?ADADD>ADAADDBD;>3A@=<=<<====<=<====<<<<<<=<<<<<=====<<<=<=<=<<====<=<?;<<?;;@D@AA@@D@@@@D@@@@D;>@=============================<=======<==?<?BCCCC=CC?CCABCBCC;;00<<>>>>>>>>>=>=>>>>>>>>>>>>><>>==>>>>><><>>>>>>?>>>>>CBC6C<CCBB?CC5ACCBCC?CC>//50BEAA?BB<BB>BBBBBBBBAB>BB?B@@@BBBBBBBBBB=<==BC@?CBCBD<1/9D7@@:@9>9@@99@999999999@9999@999999999@=9A;A;?;?;C=@C@@@@CCC@AC>AA7C?B#.##	!!+!!!+!!!*!*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"!!!!!!!!!!!!!"!!!!!!!!!-$!-*!$!-0!>!!!!!"!>!0!%!!!>!!!!!!!%!!!!!!!!>!%!!**-!!!5!!!!!!!!!"!!!!!!!!!!!!!!!!!!!!$"!""!!!!!!!"!!!!"!!!!!!!!!!!!!!!!>*+!!!%!-!!$>*!>!!!!!!!!*!!!!!!!!!!!!!!!!$*8!!!!!!/!!!!!!!!!!!!$!!!!!!!!!!*!!!!+2!2!!!*!$>!%!!*!!!!$%$$*3!!>$!!,$$!5$!>$!!!$!*$!!!$$!!!!!*!*/.!!!!!'*!*!!$!!**!!!!!!!!/5!!!:**!!!*$!&$!!*!$$!!*/!">!>5!!!!2!!!!*$$!!!*$$$$!$!$!$!!!*$!$3$$0*2!!0!0!0-*!3/!'/!!!!!!!*!*!*!/!$!!$*!$!'!!/!!!!!!!/"$!$!$*!$!!!!!/!!!"!!!&!*!//"!$!!!!!!!!!!>!$/!$!!""!!+*!!&!*3>!!!*$%3!!$!*$*!!!$(!!!!$$!!8!!$!$!!*!*$****7!$>!1!!/!/./*!!!>!!!!>!!!!$!*!*$)%>!!!!/!*!$$!!*!*!*!*>*//*!/!!!*$>!!!**!!>!20!-$$*!$$$3!$!$2>>$1!!$!$!$4$>*!**!!>!2!$>>*>*>!!!$10!*!$$1$5!!"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!$!!!"!!>!!$!!!!!!!!!!!!!!>!!!!!%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!%!!!!!%!!!!!!!!!""%!!-!!!!!!1!!!!!!!!!!F!5!!!!!!!!!!!!!!!!!!"!!!!!!!!!!!!!!!!$!!#!!!!%!!!!(!!!!!!!!!!!!!!!!!!%!!!+!!!!!!!!!1!!!!!*.!!!!"*'!1!!!!!!!!!#!!!!!!!!!!%!!!!!!!!!!!!!!!!!!"!!!L!!!!!!!!!!!!!!!!!!!!!"!!!!!!$!!!!!!!!!!!%!2!!!!!F!>!%%F!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!L!!!!--!!!!!!!!!!!!!!%"!!!4!!FF!!!!!!!!!,!!F!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"!!!!!!!2$!!!2"*!!!!!!!!!!!T!!!!!!!!!!!!!!!!!!!0!!!!!!!!!!!!!!!!!!!!!!!!!!!!>!2%!!!!!!!!!!!!!!!!!!8FF!!!!!!8!!!!!!!!!!!3!!!!!!O!!!!!!!!!!!!!!!"!!!!!#>!!!!!!!!!F!#!!!!!!!!!!!!!!88!83!F!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!$!!!!!0!>!$!58FF!!!!5!"]!!8!!!!!O!!!!!!"!!!!!!"!*!8!*!O!!8!!F!!2!!!!%!!!!!>#!!!*!!!!!!!5F"""
 	c="""1	10006	N	721	CCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC+1TCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC-1NCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC^/C^!C^/C^.C^/C^*C^!C^!C^!C^>C^!C^!C^!C^!C^>C^!C^!C^!C^!C^$C^!C^*C^!C^*C^$C^)C^%C^>C^!C^!C^!C^!C^/C^!C^*C^!C^$C^$C^!C^!C^*C^!C^*C^!C^*C^!C^*C^>C^*C^/C^/C^*C^!C^/C^!C^!C^!C^*C^$C^>C^!C^!C^!C^*C^*C^!C^!C^>C^!C^2C^0C^!C^-C^$C^$C^*C^!C^$C^$C^$C^3C^!C^$C^!C^$C^2C^>C^>C^$C^1C^!C^!C^$C^!C^$C^!C^$C^4C^$C^>C^*C^!C^*C^*C^!C^!C^>C^!C^2C^!C^$C^>C^>C^*C^>C^*C^>C^!C^!C^!C^$C^1C^0C^!C^*C^!C^$C^$C^1C^$C	::#;CD6#8<;2##<<;<<;<<<<<<<<<<<<<<<;<<<;;;;<<<;<<<<<;<;;<<<;;<;<;<<;<;<?>><>>:>;?;;<>ADDDDADAADDDDDDDDDDDABDABDAD:BCDDD>=<?<<<<<<<=<==<====<=<=<====<<<===<=<=<<==<===<<<<===<<<==<=<=<=<==<??;=??;D@@AAA@@D@D@CDCCDADD@DDDAD;=================================================?@=6?===BCBB=BCBCCA+AACAACCD244A?=7CCABB8CCCCCAAA>>>>>>>>>>>>=<>>>>>>>>>>>>>>>>>>>>=>>>>>>>>>>>>>>>=>=>>>>=>>>>==>>B?>??>>;BACCCCCCBBC>CCCBC;@C>C?@CC@CCCCC??CCBDCC?>0BBBBBBBABABBBBBBBBABBABBBBBBBBBBBBBBBBBBBBABBBBBBBBABBBBBBBBBBBBBBABBBBBBB?BBBBBBBBBBB==><====>=>>=CCCBCCCCCBCCCCCCCCBCBCCCCCCCCCCCBBCCCC@DBAAACCCBAAAD9C=9@@@9?@9@99@@9=@9@9@99@9@@9@@?@9999=A;A9A999@AA99AAA?9AA@AA9AA9>AA;A;?A:;CCCCCCCCC@@@@@@CC@CCCCCC@C@C@CCCCACCCCAACCAA7CBBBAC=CCCCA	!!+!!!+!!!*!*!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"!!!!!!!!!!!!!"!!!!!!!!!-$!-*!$!-0!>!!!!!"!>!0!%!!!>!!!!!!!%!!!!!!!!>!%!!**-!!!5!!!!!!!!!"!!!!!!!!!!!!!!!!!!!!$"!""!!!!!!!"!!!!"!!!!!!!!!!!!!!!!>*+!!!%!-!!$>*!>!!!!!!!!*!!!!!!!!!!!!!!!!$*8!!!!!!/!!!!!!!!!!!!$!!!!!!!!!!*!!!!+2!2!!!*!$>!%!!*!!!!$%$$*3!!>$!!,$$!5$!>$!!!$!*$!!!$$!!!!!*!*/.!!!!!'*!*!!$!!**!!!!!!!!/5!!!:**!!!*$!&$!!*!$$!!*/!">!>5!!!!2!!!!*$$!!!*$$$$!$!$!$!!!*$!$3$$0*2!!0!0!0-*!3/!'/!!!!!!!*!*!*!/!$!!$*!$!'!!/!!!!!!!/"$!$!$*!$!!!!!/!!!"!!!&!*!//"!$!!!!!!!!!!>!$/!$!!""!!+*!!&!*3>!!!*$%3!!$!*$*!!!$(!!!!$$!!8!!$!$!!*!*$****7!$>!1!!/!/./*!!!>!!!!>!!!!$!*!*$)%>!!!!/!*!$$!!*!*!*!*>*//*!/!!!*$>!!!**!!>!20!-$$*!$$$3!$!$2>>$1!!$!$!$4$>*!**!!>!2!$>>*>*>!!!$10!*!$$1$"""
@@ -680,19 +679,17 @@ def main():
 	print mutation_test(treatment_mutation_p,control_mutation_p)
 	print "strand bias",strand_bias_test(treatment,'A')
 	print time.time()-a,"L"
-	
-def write_mutation_file():
-	file.writelines("chrom\tposition\tref_allele\ttumor_sample\ttumor_depth\tcontrol_sample\tcontrol_depth\tSNV_kind\talter_allele\tfraction_in_tumor\tfraction_in_normal\tp_value\tfdr\n")
-	
-def write_string(string,chrom,position,ref_allele="*",tumor_depth,control_sample,control_depth,SNV_kind,alter_allele,fraction_in_tumor,fraction_in_normal,p_value,fdr="*"):
-	string+=
+		
+def additional_string(chrom,position,ref_allele,tumor_sample,tumor_depth,control_sample,control_depth,SNV_kind,main_allele,mutation_allele,fraction_in_tumor,fraction_in_normal,p_value,strand_p_value,fdr,tag):
+	a="%s\t"*15+"%s\n"
+	string+=a%(chrom,str(position),ref_allele,tumor_sample,str(tumor_depth),control_sample,str(control_depth),SNV_kind,main_allele,mutation_allele,str(round(fraction_in_tumor,3)),str(round(fraction_in_normal,3)),str(round(p_value,3)),str(round(strand_p_value,3)),fdr,tag):
 	
 def initiate(workspace,chrom):
 	file=open(workspace+'/'+chrom+'_'+'variants.txt','w')
 	file.close()
 	return workspace+'/'+chrom+'_'+'variants.txt'
 	
-def handle_specific_segment_on_certain_chrom(chrom,treatment_bam,control_bam,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff,start,reading_length=100000):
+def handle_specific_segment_on_certain_chrom(chrom,treatment_bam,control_bam,start,tumor_name="tumor",control_name="control",base_quality_cutoff=10,map_quality_cutoff=0,sequencing_depth_cutoff=20,SNP_cutoff=0.4,significant_cutoff=0.01,reading_length=100000):
 	
 	output_string=""
 	treatment_list=generate_mpileup_for_each_chrom_on_specific_region(treatment_bam,chrom,start,reading_length).strip().split("\n")
@@ -711,60 +708,87 @@ def handle_specific_segment_on_certain_chrom(chrom,treatment_bam,control_bam,bas
 			if c_position<t_position:
 				pass
 			elif c_position==t_position:
+				##sequencing depth cutoff
 				treatment_information=analyze_one_position(t_line,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff)
-				if not treatment_information:
-					print "treatment on %s:%s is not qualified"%c(chrom,str(t_position))
+				if treatment_information:
+					print "%s sample on %s:%s is not deep enough."%(tumor_name,chrom,str(t_position))
 					break
 				
 				control_information=analyze_one_position(c_line,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff)
-				if not treatment_information:
-					print "control on %s:%s is not qualified"%c(chrom,str(t_position))
+				if control_information:
+					print "%s sample on %s:%s is not deep enough."%(control_name,chrom,str(t_position))
 					break
 				
-				treatment_mutation=treatment_information[0]
-				control_mutation=control_information[0]
 				
 				#######mutation
-				treatment_base_list=treatment_information[3]
-				control_base_list=control_information[3]
-				treatment_potential_mutations=Counter(treatment_base_list).most_common()[1:]
-				
-				
-				for mutation in treatment_potential_mutations:
-					treatment_mutation_p=probability_calculation_for_mutation(treatment_mutation,mutation)
-					control_mutation_p=probability_calculation_for_mutation(control_mutation,mutation)
-					print weighted_fisher_test_for_mutation(treatment_mutation_p,control_mutation_p,accuracy)
-					print weighted_fisher_test_for_strand(treatment_mutation,accuracy)
+				check_main_allele=False
+				allele_ranking=parser_two_base_dic(treatment_information[3],treatment_information[4])
+				for allele in allele_ranking[1:]:
+					treatment_mutation_probability=probability_calculation_for_mutation(treatment_information,allele)
+					control_mutation_probability=probability_calculation_for_mutation(control_information,allele)
+					(p_value,treatment_fraction,control_fraction,treatment_depth,control_depth)=somatic_mutation_test(treatment_mutation_probability,control_mutation_probability,allele)
+					if SNP_dicision(treatment_mutation_fraction,control_mutation_fraction,SNP_cutoff):
+						output_string+=additional_string(chrom,c_position,"*",tumor_name,treatment_depth,control_name,control_depth,"SNP",allele_ranking[0],allele,treatment_fraction,control_fraction,p_value,"*",'3/4')
+					elif p_value<significant_cutoff:
+						strand_p_value=strand_bias_test(treatment_information,allele)
+						output_string+=additional_string(chrom,c_position,"*",tumor_name,treatment_depth,control_name,control_depth,"somatic",allele_ranking[0],allele,treatment_fraction,control_fraction,p_value,"*",'1/2')
+						
+					else:
+						check_main_allele=True
+				if check_main_allele:
+					(p_value,treatment_fraction,control_fraction,treatment_depth,control_depth)=somatic_mutation_test(treatment_mutation_probability,control_mutation_probability,allele_ranking[0])
+					if p_value<significant_cutoff:
+						strand_p_value=strand_bias_test(treatment_information,allele_ranking[0])
+						output_string+=additional_string(chrom,c_position,"*",tumor_name,treatment_depth,control_name,control_depth,"somatic",allele_ranking[0],allele_ranking[0],treatment_fraction,control_fraction,p_value,"*",'6')
+						
 					
 				####deletion
-				treatment_deletion=treatment_information[1]
-				treatment_deletion_p=probability_calculation_for_deletion(treatment_deletion)
-				if treatment_deletion_p==[1.0]:
-					print "no deletion on %s:%s"%c(chrom,str(t_position))
+				
+				treatment_deletion_probability=probability_calculation_for_deletion(treatment_information)
+				if treatment_deletion_probability[0]==[1.0]:
+					print "no deletion on %s:%s from %s sample"%(chrom,str(t_position),tumor_name)
 				else:
 					pass
 				
-				control_deletion=control_information[1]
-				control_deletion_p=probability_calculation_for_deletion(control_deletion)
-				print weighted_fisher_test_for_deletion(treatment_deletion_p,control_deletion_p,len(treatment_base_list),len(control_base_list),accuracy)
+				control_deletion_probability=probability_calculation_for_deletion(control_information)
+				
+				(p_value,treatment_fraction,control_fraction,treatment_depth,control_depth)=deletion_test(treatment_deletion_probability,control_deletion_probability)
+				if p_value<significant_cutoff:
+					output_string+=additional_string(chrom,c_position,"*",tumor_name,treatment_depth,control_name,control_depth,"del",allele_ranking[0],"-",treatment_fraction,control_fraction,p_value,"*",'*')
+				
 				
 				###insertion
-				treatment_insertion=treatment_information[2]
-				treatment_insertion_p=probability_calculation_for_insertion(treatment_insertion)
+				### mutation_result [[base,base_p,map_p].....]
+				### deletion_result [[base_p,map_p].....]
+				### insertion_result
+				### mutation_plus {}
+				### mutation_minus {}
+				### valid sequencing depth
+				### valid plus sequencing depth
+				### valid minus sequencing depth
 				
-				if treatment_insertion_p==[[[]],[[]]]:
-					print "no insertion on %s:%s"%c(chrom,str(t_position))
+				treatment_insertion_probability=probability_calculation_for_insertion(treatment_information)
+				
+				if treatment_insertion_p[0]==[]:
+					print "no insertion on %s:%s"%(chrom,str(t_position))
 				else:
 					pass
 					
-				control_insertion=control_information[2]
-				control_insertion_p=probability_calculation_for_insertion(control_insertion)
-				print weighted_fisher_test_for_insertion(treatment_insertion_p,control_insertion_p,len(treatment_base_list),len(control_base_list),accuracy)
-				
+				control_insertion_probability=probability_calculation_for_insertion(control_information)
+				[p_value_list,allele_list,treatment_fraction_list,control_fraction_list]=insertion_test(treatment_insertion_probability,control_insertion_probability)
+				for v in range(len(p_value_list):
+					p_value=p_value_list[v]
+					if p_value>=significant_cutoff:
+						break
+					allele=allele_list[v]
+					treatment_fraction=treatment_fraction_list[v]
+					control_fraction=control_fraction_list[v]
+					output_string+=additional_string(chrom,c_position,"*",tumor_name,treatment_depth,control_name,control_depth,"ins",allele_ranking[0],allele,treatment_fraction,control_fraction,p_value,"*",'*')
+	
 				control_pivot=j+1
 			
 			else:
-				print "no available control on %s:%s"%c(chrom,str(t_position)) 
+				print "no available control on %s:%s"%(chrom,str(t_position)) 
 				control_pivot=j
 				break
 	
@@ -779,3 +803,11 @@ def read_bed(bed_path):
 	return a 
 
 main()
+
+def main():
+	chrom_list=[]
+	output_string="chrom\tposition\tref_allele\ttumor_sample\ttumor_depth\tcontrol_sample\tcontrol_depth\tSNV_kind\tmain_allele\talter_allele\tfraction_in_tumor\tfraction_in_normal\tp_value\tstrand_p_value\tfdr\ttag\n"
+	output_file=open(options.output_file,'w')
+	for chrom in chrom_list:
+		handle_specific_segment_on_certain_chrom(chrom,options.treatment_bam,options.control_bam,start,options.tumor_name,options.control_name,option.base_quality_cutoff,map_quality_cutoff=0,sequencing_depth_cutoff=20,SNP_cutoff=0.4,significant_cutoff=0.01,reading_length=100000)
+		
