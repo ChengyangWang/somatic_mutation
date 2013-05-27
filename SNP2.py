@@ -689,7 +689,7 @@ def initiate(workspace,chrom):
 	file.close()
 	return workspace+'/'+chrom+'_'+'variants.txt'
 	
-def handle_specific_segment_on_certain_chrom(chrom,treatment_bam,control_bam,start,tumor_name="tumor",control_name="control",base_quality_cutoff=10,map_quality_cutoff=0,sequencing_depth_cutoff=20,SNP_cutoff=0.4,significant_cutoff=0.01,reading_length=100000):
+def handle_certain_segment_on_specific_chrom(chrom,treatment_chrom,control_chrom,treatment_bam,control_bam,start,tumor_name="tumor",control_name="control",base_quality_cutoff=10,map_quality_cutoff=0,sequencing_depth_cutoff=20,SNP_cutoff=0.4,significant_cutoff=0.01,reading_length=100000):
 	
 	output_string=""
 	treatment_list=generate_mpileup_for_each_chrom_on_specific_region(treatment_bam,chrom,start,reading_length).strip().split("\n")
@@ -791,6 +791,8 @@ def handle_specific_segment_on_certain_chrom(chrom,treatment_bam,control_bam,sta
 				print "no available control on %s:%s"%(chrom,str(t_position)) 
 				control_pivot=j
 				break
+				
+	return output_string
 	
 def read_bed(bed_path):
 	file=open(bed_path)
@@ -799,15 +801,156 @@ def read_bed(bed_path):
 		line=file.readline()
 		if not line:break
 		line=line.strip().split()
-		a.append([line[0],line[1],line[2]]) ###chrom,start,end
-	return a 
+		a.append([line[0],int(line[1]),int(line[2])]) ###chrom,start,end
+	return a
+	
+def read_postion(position_path):
+	file=open(position_path)
+	a=[]
+	while True:
+		line=file.readline()
+		if not line:break
+		line=line.strip().split()
+		a.append([line[0],int(line[1])]) ###chrom,position
+	return a
 
-main()
+def mm9_parser_bam_header(bam_file):
+	chrom_list=[str(i) for i in range(1,20)]+["chr"+str(i) for i in range(1,23)]+["X","chrX","Y","chrY"]
+	bam_chrom_dic={} ###{chromosome:length}
+	cmd="samtools view -H %s"%bam_file
+	header=sp(cmd)[0].strip().split("\n")
+	for value in header:
+		value=value.split()
+		if value[0]=="@SQ":
+			if value[1].split(":")[1] in chrom_list:
+				bam_chrom_dic[value[1].split(":")[1]]=int(value[2].split(":")[1])			
+		else:
+			break
+	return bam_chrom_dic
+
+def hg19_parser_bam_header(bam_file):
+	chrom_list=[str(i) for i in range(1,23)]+["chr"+str(i) for i in range(1,23)]+["X","chrX","Y","chrY"]
+	bam_chrom_dic={} ###{chromosome:length}
+	cmd="samtools view -H %s"%bam_file
+	header=sp(cmd)[0].strip().split("\n")
+	for value in header:
+		value=value.split()
+		if value[0]=="@SQ":
+			if value[1].split(":")[1] in chrom_list:
+				bam_chrom_dic[value[1].split(":")[1]]=int(value[2].split(":")[1])			
+		else:
+			break
+	return bam_chrom_dic
+
+def chromsome_information(treatment_bam,control_bam,species):
+	if options.species=="hg":
+		chrom_complete_list=[("chr"+str(i),str(i)) for i in range(1,23)]+[("chrX","X"),("chrY","Y")]
+		chrom_list=[]
+		print_chrom_list=[]
+		
+		treatment_chrom_dic=hg19_parser_bam_header(treatment_bam)
+		control_chrom_dic=hg19_parser_bam_header(control_bam)
+		for value in chrom_complete_list:
+			if treatment_chrom_dic.has_key(value[0]):
+				if control_chrom_dic.has_key(value[0]):
+					chrom_list.append((value[0],value[0],treatment_chrom_dic[value[0]]))
+					print_chrom_list.append(value[0])
+				elif control_chrom_dic.has_key(value[1]):
+					chrom_list.append((value[0],value[1],treatment_chrom_dic[value[0]]))
+					print_chrom_list.append(value[0])
+				else:
+					pass
+			elif treatment_chrom_dic.has_key(value[1]):
+				if control_chrom_dic.has_key(value[0]):
+					chrom_list.append((value[1],value[0],treatment_chrom_dic[value[1]]))
+					print_chrom_list.append(value[0])
+				elif control_chrom_dic.has_key(value[1]):
+					chrom_list.append((value[1],value[1],treatment_chrom_dic[value[1]]))
+					print_chrom_list.append(value[0])
+				else:
+					pass
+			else:
+				pass
+		a="%s "*len(print_chrom_list)
+		print "Alignment on "+a%print_chrom_list+"are availble for Both tumor sample and control sample~~"
+		return (print_chrom_list,chrom_list) ####([chr1,chr2....],[(1,chr1,length).....])
+					
+	elif options.species=="mm":
+		chrom_complete_list=[("chr"+str(i),str(i)) for i in range(1,20)]+[("chrX","X"),("chrY","Y")]
+		chrom_list=[]
+		print_chrom_list=[]
+		treatment_chrom_dic=mm9_parser_bam_header(treatment_bam)
+		control_chrom_dic=mm9_parser_bam_header(control_bam)
+		for value in chrom_complete_list:
+			if treatment_chrom_dic.has_key(value[0]):
+				if control_chrom_dic.has_key(value[0]):
+					chrom_list.append((value[0],value[0],treatment_chrom_dic[value[0]]))
+					print_chrom_list.append(value[0])
+				elif control_chrom_dic.has_key(value[1]):
+					chrom_list.append((value[0],value[1],treatment_chrom_dic[value[0]]))
+					print_chrom_list.append(value[0])
+				else:
+					pass
+			elif treatment_chrom_dic.has_key(value[1]):
+				if control_chrom_dic.has_key(value[0]):
+					chrom_list.append((value[1],value[0],treatment_chrom_dic[value[1]]))
+					print_chrom_list.append(value[0])
+				elif control_chrom_dic.has_key(value[1]):
+					chrom_list.append((value[1],value[1],treatment_chrom_dic[value[1]]))
+					print_chrom_list.append(value[0])
+				else:
+					pass
+			else:
+				pass
+		a="%s "*len(print_chrom_list)
+		print "Alignment on "+a%print_chrom_list+"are availble for Both tumor sample and control sample~~"
+		return (print_chrom_list,chrom_list) ####([chr1,chr2....],[(1,chr1,length).....])
+	else:
+		print "please refer to assign your interested chromsome."
+
+def handle_large_interval(start,end,output_file,chrom,treatment_chrom,control_chrom,treatment_bam,control_bam,tumor_name,control_name,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff,SNP_cutoff,significant_cutoff,reading_length):
+	while True:
+		if start+reading_length<end:
+			start_time=time.time()
+			output_string=handle_certain_segment_on_specific_chrom(chrom,treatment_chrom,control_chrom,treatment_bam,control_bam,start,tumor_name,control_name,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff,SNP_cutoff,significant_cutoff,reading_length)
+			output_file.writelines(output_string)
+			end_time=time.time()
+			start+=reading_length
+			print "handling position %s to %s on %s consumes %s minutes."%(str(start),str(start+reading_length),chrom,str((end_time-start_time)/60))
+		else:
+			start_time=time.time()
+			output_string=handle_certain_segment_on_specific_chrom(chrom,treatment_chrom,control_chrom,treatment_bam,control_bam,start,tumor_name,control_name,base_quality_cutoff,map_quality_cutoff,sequencing_depth_cutoff,SNP_cutoff,significant_cutoff,reading_length,end-start)
+			output_file.writelines(output_string)
+			end_time=time.time()
+			print "handling position %s to %s on %s consumes %s minutes."%(str(start),str(end),chrom,str((end_time-start_time)/60))
+			break
 
 def main():
-	chrom_list=[]
+	chrom_information=chromsome_information(options.treatment_bam,options.control_bam,species)
 	output_string="chrom\tposition\tref_allele\ttumor_sample\ttumor_depth\tcontrol_sample\tcontrol_depth\tSNV_kind\tmain_allele\talter_allele\tfraction_in_tumor\tfraction_in_normal\tp_value\tstrand_p_value\tfdr\ttag\n"
 	output_file=open(options.output_file,'w')
-	for chrom in chrom_list:
-		handle_specific_segment_on_certain_chrom(chrom,options.treatment_bam,options.control_bam,start,options.tumor_name,options.control_name,option.base_quality_cutoff,map_quality_cutoff=0,sequencing_depth_cutoff=20,SNP_cutoff=0.4,significant_cutoff=0.01,reading_length=100000)
+	for i in range(len(chrom_information[0])):
+		chrom=chrom_information[0][i]
+		treatment_chrom=chrom_information[1][i][0]
+		control_chrom=chrom_information[1][i][1]
+		chrom_length=chrom_information[1][i][2]
+		
+		start=0
+		end=chrom_length
+		handle_large_interval(start,end,output_file,chrom,treatment_chrom,control_chrom,options.treatment_bam,options.control_bam,options.tumor_name,options.control_name,options.base_quality_cutoff,options.map_quality_cutoff,options.sequencing_depth_cutoff,options.SNP_cutoff,options.significant_cutoff,options.reading_length):
+
+		
+	for interval in interval_list:
+		if interval[0] in chrom_information[0]:
+			start=interval[1]
+			end=interval[2]
+			handle_large_interval(start,end,output_file,chrom,treatment_chrom,control_chrom,options.treatment_bam,options.control_bam,options.tumor_name,options.control_name,options.base_quality_cutoff,options.map_quality_cutoff,options.sequencing_depth_cutoff,options.SNP_cutoff,options.significant_cutoff,options.reading_length):
+		else:
+			print ""
+	for position in position_list:
+		
+				
+				
+			
+	output_file.close()
 		
